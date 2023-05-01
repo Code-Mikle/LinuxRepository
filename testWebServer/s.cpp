@@ -8,11 +8,11 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
+#include <sys/select.h>
 #include "fun.h"
 #include "pthread_pool.h"
 
-
-struct sockInfo sockinfos[128];
+// struct sockInfo sockinfos[128];
 
 int main(int argc, char* argv[])
 {
@@ -45,50 +45,87 @@ int main(int argc, char* argv[])
     }
 
     // listening for connection requests from 'servfd', with a maximum of 5 connections allowed.
-    if(listen(servfd, 5) == -1){
+    if(listen(servfd, 8) == -1){
         error_handling("listen() error!");
     }
 
+    // create an fd_set, which stores the file descriptor to be detected.
+    fd_set rdset, tmp;
+    FD_ZERO(&rdset);
+    FD_SET(servfd, &rdset);
+    int maxfd = servfd; 
+
     // create thread_pool
-    threadpool<sockInfo>*pool = NULL;
+    threadpool<int>*pool = NULL;
     try{
-        pool = new threadpool<sockInfo>;
+        pool = new threadpool<int>;
     }catch(...){
         return 1;
     }
 
-    // initialize struct
-    int max = sizeof(sockinfos) / sizeof(sockinfos[0]);
-    initialize_struct(max, sockinfos);
-
     while(1){
-        struct sockaddr_in clnt_adr;
-        socklen_t clnt_adr_size = sizeof(clnt_adr);
+        tmp = rdset;
 
-        // accept connection
-        clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
-        if(clntfd == -1){
-            error_handling("accept() error!");
-        }
+        int ret = select(maxfd + 1, &tmp, NULL, NULL, NULL);
+        if(ret == -1){
+            error_handling("select() error!");
+        }else if(ret == 0){
+            continue;
+        }else if(ret > 0){
+            if(FD_ISSET(servfd, &tmp)){
+                struct sockaddr_in clnt_adr;
+                socklen_t clnt_adr_size = sizeof(clnt_adr);
+                clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
+                if(clntfd == 1){
+                    error_handling("accept() error!");
+                }
+                // add the new descriptor into set
+                FD_SET(clntfd, &rdset);
 
-        struct sockInfo* pinfo;
-        for(int i = 0; i < max; i++){
-            if(sockinfos[i].fd == -1){
-                pinfo = &sockinfos[i];
-                break;
+                // update the value of "maxfd"
+                maxfd = maxfd > clntfd ? maxfd : clntfd;
             }
 
-            if(i == max - 1){
-                i = 0;
+            for(int i = servfd + 1; i <= maxfd; i++){
+                if(FD_ISSET(i, &tmp)){
+                    pool->append(&i);
+                }
             }
         }
-
-        pinfo->fd = clntfd;
-        memcpy(&pinfo->addr, &clnt_adr, clnt_adr_size);
-
-        // append into threadpool
-        pool->append(pinfo);
     }
+
+    // // initialize struct
+    // int max = sizeof(sockinfos) / sizeof(sockinfos[0]);
+    // initialize_struct(max, sockinfos);
+
+    // while(1){
+    //     struct sockaddr_in clnt_adr;
+    //     socklen_t clnt_adr_size = sizeof(clnt_adr);
+
+    //     // accept connection
+    //     clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
+    //     if(clntfd == -1){
+    //         error_handling("accept() error!");
+    //     }
+
+    //     struct sockInfo* pinfo;
+    //     for(int i = 0; i < max; i++){
+    //         if(sockinfos[i].fd == -1){
+    //             pinfo = &sockinfos[i];
+    //             break;
+    //         }
+
+    //         if(i == max - 1){
+    //             i = 0;
+    //         }
+    //     }
+
+    //     pinfo->fd = clntfd;
+    //     memcpy(&pinfo->addr, &clnt_adr, clnt_adr_size);
+
+    //     // append into threadpool
+    //     pool->append(pinfo);
+    // }
 
     close(servfd);
     return 0;

@@ -44,6 +44,8 @@ int main(int argc, char* argv[])
         printf("client recv message: %s\n", recv_message);
         bzero(recv_message, 0);
 
+        sleep(1);
+
         idx++;
     }
     close(servfd);

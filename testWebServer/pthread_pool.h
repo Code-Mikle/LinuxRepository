@@ -116,18 +116,20 @@ void threadpool<T>::run(){
 template<typename T>
 void threadpool<T>::process(T* pinfo){
 
-    char cliIP[16] = {0};
-    inet_ntop(AF_INET, &pinfo->addr.sin_addr.s_addr, cliIP, sizeof(cliIP));
-    unsigned short cliPort = ntohs(pinfo->addr.sin_port);
-    printf("client ip is: %s, port is %d\n", cliIP, cliPort);
+    int temp = *pinfo;
+    
+    // char cliIP[16] = {0};
+    // inet_ntop(AF_INET, &pinfo->addr.sin_addr.s_addr, cliIP, sizeof(cliIP));
+    // unsigned short cliPort = ntohs(pinfo->addr.sin_port);
+    // printf("client ip is: %s, port is %d\n", cliIP, cliPort);
 
     char recvBuf[1024] = {0};
-    setNoBlocking(pinfo->fd);
+    setNoBlocking(temp);
     int ret = 0;
     time_t timer;
     struct tm* Now;
 
-    while(read(pinfo->fd, recvBuf, sizeof(recvBuf)) != 0){
+    while(read(temp, recvBuf, sizeof(recvBuf)) != 0){
         printf("server recv message: %s\n", recvBuf);
         bzero(recvBuf, 0);
 
@@ -136,10 +138,10 @@ void threadpool<T>::process(T* pinfo){
         time(&timer);
         Now = localtime(&timer);
         char *res = asctime(Now);
-        ret = write(pinfo->fd, res, strlen(res));
+        ret = write(temp, res, strlen(res));
     }
 
-    close(pinfo->fd);
+    close(temp);
 }
 
 #endif
