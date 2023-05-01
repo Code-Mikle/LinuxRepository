@@ -14,36 +14,6 @@
 
 struct sockInfo sockinfos[128];
 
-// void* working(void* arg){
-//     struct sockInfo* pinfo = (struct sockInfo*)arg;
-
-//     char cliIP[16] = {0};
-//     inet_ntop(AF_INET, &pinfo->addr.sin_addr.s_addr, cliIP, sizeof(cliIP));
-//     unsigned short cliPort = ntohs(pinfo->addr.sin_port);
-//     printf("client ip is: %s, port is %d\n", cliIP, cliPort);
-
-//     char recvBuf[1024] = {0};
-//     setNoBlocking(pinfo->fd);
-//     int ret = 0;
-//     time_t timer;
-//     struct tm* Now;
-
-//     while(read(pinfo->fd, recvBuf, sizeof(recvBuf)) != 0){
-//         printf("server recv message: %s\n", recvBuf);
-//         bzero(recvBuf, 0);
-
-//         sleep(1);
-
-//         time(&timer);
-//         Now = localtime(&timer);
-//         char *res = asctime(Now);
-//         ret = write(pinfo->fd, res, strlen(res));
-//     }
-
-//     close(pinfo->fd);
-//     return NULL;
-// }
-
 int main(int argc, char* argv[])
 {
     // determine whether the input parameters are legal
@@ -118,11 +88,6 @@ int main(int argc, char* argv[])
 
         // append into threadpool
         pool->append(pinfo);
-
-        // create child pthread
-        // pthread_create(&pinfo->tid, NULL, working, pinfo);
-        
-        // pthread_detach(pinfo->tid);
     }
 
     close(servfd);
