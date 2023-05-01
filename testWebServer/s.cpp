@@ -8,11 +8,12 @@
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
-#include <sys/select.h>
+#include <sys/epoll.h>
 #include "fun.h"
 #include "pthread_pool.h"
 
 // struct sockInfo sockinfos[128];
+#define MAX_EVENT_NUMBER 50  // the maximum of events monitored
 
 int main(int argc, char* argv[])
 {
@@ -49,12 +50,6 @@ int main(int argc, char* argv[])
         error_handling("listen() error!");
     }
 
-    // create an fd_set, which stores the file descriptor to be detected.
-    fd_set rdset, tmp;
-    FD_ZERO(&rdset);
-    FD_SET(servfd, &rdset);
-    int maxfd = servfd; 
-
     // create thread_pool
     threadpool<int>*pool = NULL;
     try{
@@ -63,70 +58,84 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    while(1){
-        tmp = rdset;
+    struct epoll_event event;
+    int event_cnt = 0;
+    // create epoll objects and event arrays
+    epoll_event events[MAX_EVENT_NUMBER];
+    int epollfd = epoll_create(5);
 
-        int ret = select(maxfd + 1, &tmp, NULL, NULL, NULL);
-        if(ret == -1){
-            error_handling("select() error!");
-        }else if(ret == 0){
-            continue;
-        }else if(ret > 0){
-            if(FD_ISSET(servfd, &tmp)){
+    threadpool<int>::init_epollfd(epollfd);
+
+    event.events = EPOLLIN;
+    event.data.fd = servfd;
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, servfd, &event);
+    
+    char buffer[100] = {0};
+    int idx = 0;
+    while(1){
+        event_cnt = epoll_wait(epollfd, events, MAX_EVENT_NUMBER, -1);
+        if(event_cnt == -1){
+            error_handling("epoll_wait() error!");
+        }
+
+        printf("%dth event_cnt is: %d\n", idx++, event_cnt);  
+        for(int i = 0; i < event_cnt; i++){
+            if(events[i].data.fd == servfd){
                 struct sockaddr_in clnt_adr;
                 socklen_t clnt_adr_size = sizeof(clnt_adr);
                 clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
-                if(clntfd == 1){
-                    error_handling("accept() error!");
-                }
-                // add the new descriptor into set
-                FD_SET(clntfd, &rdset);
-
-                // update the value of "maxfd"
-                maxfd = maxfd > clntfd ? maxfd : clntfd;
+                event.events = EPOLLIN;
+                event.data.fd = clntfd;
+                epoll_ctl(epollfd, EPOLL_CTL_ADD, clntfd, &event);
+                printf("connected client: %d\n", clntfd);
+            }else{
+                pool->append(events[i].data.fd);
             }
-
-            for(int i = servfd + 1; i <= maxfd; i++){
-                if(FD_ISSET(i, &tmp)){
-                    pool->append(&i);
-                }
-            }
+                
+                // int str_len = read(events[i].data.fd, buffer, sizeof(buffer));
+                // if(str_len == 0){
+                //     epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
+                //     close(events[i].data.fd);
+                //     printf("closed client: %d\n", events[i].data.fd);
+                // }else{
+                //     write(events[i].data.fd, buffer, str_len);
+                // }
+            
         }
-    }
-
-    // // initialize struct
-    // int max = sizeof(sockinfos) / sizeof(sockinfos[0]);
-    // initialize_struct(max, sockinfos);
+    } 
+    close(epollfd);
+    close(servfd);
 
     // while(1){
-    //     struct sockaddr_in clnt_adr;
-    //     socklen_t clnt_adr_size = sizeof(clnt_adr);
+    //     tmp = rdset;
 
-    //     // accept connection
-    //     clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
-    //     if(clntfd == -1){
-    //         error_handling("accept() error!");
-    //     }
+    //     int ret = select(maxfd + 1, &tmp, NULL, NULL, NULL);
+    //     if(ret == -1){
+    //         error_handling("select() error!");
+    //     }else if(ret == 0){
+    //         continue;
+    //     }else if(ret > 0){
+    //         if(FD_ISSET(servfd, &tmp)){
+    //             struct sockaddr_in clnt_adr;
+    //             socklen_t clnt_adr_size = sizeof(clnt_adr);
+    //             clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
+    //             if(clntfd == 1){
+    //                 error_handling("accept() error!");
+    //             }
+    //             // add the new descriptor into set
+    //             FD_SET(clntfd, &rdset);
 
-    //     struct sockInfo* pinfo;
-    //     for(int i = 0; i < max; i++){
-    //         if(sockinfos[i].fd == -1){
-    //             pinfo = &sockinfos[i];
-    //             break;
+    //             // update the value of "maxfd"
+    //             maxfd = maxfd > clntfd ? maxfd : clntfd;
     //         }
 
-    //         if(i == max - 1){
-    //             i = 0;
+    //         for(int i = servfd + 1; i <= maxfd; i++){
+    //             if(FD_ISSET(i, &tmp)){
+    //                 pool->append(&i);
+    //             }
     //         }
     //     }
-
-    //     pinfo->fd = clntfd;
-    //     memcpy(&pinfo->addr, &clnt_adr, clnt_adr_size);
-
-    //     // append into threadpool
-    //     pool->append(pinfo);
     // }
 
-    close(servfd);
     return 0;
 }
