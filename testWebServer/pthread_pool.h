@@ -5,19 +5,16 @@
 #include <exception>
 #include <pthread.h>
 #include "locker.h"
-#include "fun.h"
 
 template<typename T>
 class threadpool{
 public:
     threadpool(int thread_number = 8, int max_requests = 10000);
     ~threadpool();
-    bool append(T request);
-    void process(T pinfo);
+    bool append(T* request);
+    // void process(T* pinfo);
 
-    static void init_epollfd(int epollfd);
 private:
-    static int m_epollfd;
     static void* worker(void* arg);
     void run();
 
@@ -32,7 +29,7 @@ private:
     int m_max_requests;
     
     // request queue
-    std::list<T> m_workqueue;
+    std::list<T*> m_workqueue;
 
     // protect the mutex of the request queue
     locker m_queuelocker;
@@ -43,13 +40,6 @@ private:
     // end thread or not
     bool m_stop;
 };
-
-template<typename T>
-void threadpool<T>::init_epollfd(int epollfd){
-    m_epollfd = epollfd;
-}
-
-template<typename T> int threadpool<T>::m_epollfd = -1;
 
 template<typename T>
 threadpool<T>::threadpool(int thread_number, int max_requests):
@@ -84,7 +74,7 @@ threadpool<T>::~threadpool(){
 }
 
 template<typename T>
-bool threadpool<T>::append(T request){
+bool threadpool<T>::append(T* request){
     m_queuelocker.lock();
     if(m_workqueue.size() > m_max_requests){
         m_queuelocker.unlock();
@@ -112,45 +102,45 @@ void threadpool<T>::run(){
             m_queuelocker.unlock();
             continue;
         }
-        T request = m_workqueue.front();
+        T* request = m_workqueue.front();
         m_workqueue.pop_front();
         m_queuelocker.unlock();
         if(!request){
             continue;
         }
-        process(request);
+        request->process();
     }
 }
 
-template<typename T>
-void threadpool<T>::process(T pinfo){
+// template<typename T>
+// void threadpool<T>::process(T* pinfo){
 
-    int temp = pinfo;
+//     int temp = pinfo;
     
-    // char cliIP[16] = {0};
-    // inet_ntop(AF_INET, &pinfo->addr.sin_addr.s_addr, cliIP, sizeof(cliIP));
-    // unsigned short cliPort = ntohs(pinfo->addr.sin_port);
-    // printf("client ip is: %s, port is %d\n", cliIP, cliPort);
+//     // char cliIP[16] = {0};
+//     // inet_ntop(AF_INET, &pinfo->addr.sin_addr.s_addr, cliIP, sizeof(cliIP));
+//     // unsigned short cliPort = ntohs(pinfo->addr.sin_port);
+//     // printf("client ip is: %s, port is %d\n", cliIP, cliPort);
 
-    char recvBuf[1024] = {0};
-    setNoBlocking(temp);
-    int ret = 0;
-    time_t timer;
-    struct tm* Now;
+//     char recvBuf[1024] = {0};
+//     setNoBlocking(temp);
+//     int ret = 0;
+//     time_t timer;
+//     struct tm* Now;
 
-    while(read(temp, recvBuf, sizeof(recvBuf)) != 0){
-        printf("server recv message: %s\n", recvBuf);
-        bzero(recvBuf, 0);
+//     while(read(temp, recvBuf, sizeof(recvBuf)) != 0){
+//         printf("server recv message: %s\n", recvBuf);
+//         bzero(recvBuf, 0);
 
-        sleep(1);
+//         sleep(1);
 
-        time(&timer);
-        Now = localtime(&timer);
-        char *res = asctime(Now);
-        ret = write(temp, res, strlen(res));
-    }
-    epoll_ctl(m_epollfd, EPOLL_CTL_DEL, temp, NULL);
-    close(temp);
-}
+//         time(&timer);
+//         Now = localtime(&timer);
+//         char *res = asctime(Now);
+//         ret = write(temp, res, strlen(res));
+//     }
+//     epoll_ctl(m_epollfd, EPOLL_CTL_DEL, temp, NULL);
+//     close(temp);
+// }
 
 #endif

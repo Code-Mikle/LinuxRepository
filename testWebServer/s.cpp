@@ -1,141 +1,132 @@
-#include <stdio.h>
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <errno.h>
 #include <fcntl.h>
-#include <time.h>
-#include <pthread.h>
+#include <stdlib.h>
 #include <sys/epoll.h>
-#include "fun.h"
+#include <sys/types.h>
+#include <string.h>
+#include <time.h>
+#include <signal.h>
+#include <assert.h>
+#include <pthread.h>
 #include "pthread_pool.h"
+#include "http_conn.h"
 
 // struct sockInfo sockinfos[128];
 #define MAX_EVENT_NUMBER 50  // the maximum of events monitored
+#define MAX_FD 65536 // maximum number of flie descriptor
+
+extern void addfd(int epollfd, int fd, bool one_shot);
+extern void removefd(int epollfd, int fd);
+
+// 添加信号捕捉
+void addsig(int sig, void( handler )(int)){
+    struct sigaction sa;
+    memset( &sa, '\0', sizeof( sa ) );
+    sa.sa_handler = handler;
+    sigfillset( &sa.sa_mask );
+    assert( sigaction( sig, &sa, NULL ) != -1 );
+}
 
 int main(int argc, char* argv[])
 {
     // determine whether the input parameters are legal
     if(argc != 2){
         printf("Usage %s <port>\n", argv[0]);
+        return 1;
     }
     
     // servfd: listening file descriptor. clntfd: connection file descriptor.
     int servfd, clntfd;
+
+    addsig( SIGPIPE, SIG_IGN );
     
+    // create thread_pool
+    threadpool<http_conn>*pool = NULL;
+    try{
+        pool = new threadpool<http_conn>;
+    }catch(...){
+        return 1;
+    }
+
+    // save all client information
+    http_conn* users = new http_conn[MAX_FD];
+
     // create socket
     servfd = socket(PF_INET, SOCK_STREAM, 0);
-    if(servfd == -1){
-        error_handling("socket() error!");
-    }
+
+    struct sockaddr_in serv_adr;
+    serv_adr.sin_family = AF_INET;
+    serv_adr.sin_addr.s_addr = INADDR_ANY;
+    serv_adr.sin_port = htons(atoi(argv[1]));
 
     // set port reuse
     int reuse = 1;
     setsockopt(servfd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
     
-    struct sockaddr_in serv_adr;
-    serv_adr.sin_family = AF_INET;
-    serv_adr.sin_addr.s_addr = INADDR_ANY;
-    serv_adr.sin_port = htons(atoi(argv[1]));
     // bind local port
     int ret = bind(servfd, (struct sockaddr*)&serv_adr, sizeof(serv_adr));
-    if(ret == -1){
-        error_handling("bind() error!");
-    }
 
     // listening for connection requests from 'servfd', with a maximum of 5 connections allowed.
-    if(listen(servfd, 8) == -1){
-        error_handling("listen() error!");
-    }
-
-    // create thread_pool
-    threadpool<int>*pool = NULL;
-    try{
-        pool = new threadpool<int>;
-    }catch(...){
-        return 1;
-    }
-
-    struct epoll_event event;
-    int event_cnt = 0;
+    listen(servfd, 8);
+    
     // create epoll objects and event arrays
     epoll_event events[MAX_EVENT_NUMBER];
     int epollfd = epoll_create(5);
-
-    threadpool<int>::init_epollfd(epollfd);
-
-    event.events = EPOLLIN;
-    event.data.fd = servfd;
-    epoll_ctl(epollfd, EPOLL_CTL_ADD, servfd, &event);
+    addfd(epollfd, servfd, false);
+    http_conn::m_epollfd = epollfd;
     
-    char buffer[100] = {0};
-    int idx = 0;
-    while(1){
-        event_cnt = epoll_wait(epollfd, events, MAX_EVENT_NUMBER, -1);
-        if(event_cnt == -1){
-            error_handling("epoll_wait() error!");
+    // int idx = 0;
+    while(true){
+        int event_cnt = epoll_wait(epollfd, events, MAX_EVENT_NUMBER, -1);
+        if((event_cnt < 0) && (errno != EINTR)){
+            printf("epoll failure\n");
+            break;
         }
 
-        printf("%dth event_cnt is: %d\n", idx++, event_cnt);  
+        // printf("%dth event_cnt is: %d\n", idx++, event_cnt);  
         for(int i = 0; i < event_cnt; i++){
-            if(events[i].data.fd == servfd){
+            int sockfd = events[i].data.fd;
+
+            if(sockfd == servfd){
                 struct sockaddr_in clnt_adr;
                 socklen_t clnt_adr_size = sizeof(clnt_adr);
                 clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
-                event.events = EPOLLIN;
-                event.data.fd = clntfd;
-                epoll_ctl(epollfd, EPOLL_CTL_ADD, clntfd, &event);
-                printf("connected client: %d\n", clntfd);
-            }else{
-                pool->append(events[i].data.fd);
-            }
                 
-                // int str_len = read(events[i].data.fd, buffer, sizeof(buffer));
-                // if(str_len == 0){
-                //     epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
-                //     close(events[i].data.fd);
-                //     printf("closed client: %d\n", events[i].data.fd);
-                // }else{
-                //     write(events[i].data.fd, buffer, str_len);
-                // }
-            
+                if(clntfd < 0){
+                    printf("errno is: %d\n", errno);
+                    continue;
+                }
+
+                if(http_conn::m_user_count >= MAX_FD){
+                    close(clntfd);
+                    continue;
+                }
+
+                users[clntfd].init(clntfd, clnt_adr);
+            }else if(events[i].events & (EPOLLERR | EPOLLRDHUP | EPOLLERR)){
+                users[sockfd].close_conn();
+            }else if(events[i].events & EPOLLIN){
+                // printf("it's read event!\n");
+                if(users[sockfd].read_data()){
+                    pool->append(users + sockfd);
+                }else{
+                    users[sockfd].close_conn();
+                }
+            }else if(events[i].events & EPOLLOUT){
+                if(!users[sockfd].write()){
+                    users[sockfd].close_conn();
+                }
+            }
         }
     } 
     close(epollfd);
     close(servfd);
-
-    // while(1){
-    //     tmp = rdset;
-
-    //     int ret = select(maxfd + 1, &tmp, NULL, NULL, NULL);
-    //     if(ret == -1){
-    //         error_handling("select() error!");
-    //     }else if(ret == 0){
-    //         continue;
-    //     }else if(ret > 0){
-    //         if(FD_ISSET(servfd, &tmp)){
-    //             struct sockaddr_in clnt_adr;
-    //             socklen_t clnt_adr_size = sizeof(clnt_adr);
-    //             clntfd = accept(servfd, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
-    //             if(clntfd == 1){
-    //                 error_handling("accept() error!");
-    //             }
-    //             // add the new descriptor into set
-    //             FD_SET(clntfd, &rdset);
-
-    //             // update the value of "maxfd"
-    //             maxfd = maxfd > clntfd ? maxfd : clntfd;
-    //         }
-
-    //         for(int i = servfd + 1; i <= maxfd; i++){
-    //             if(FD_ISSET(i, &tmp)){
-    //                 pool->append(&i);
-    //             }
-    //         }
-    //     }
-    // }
-
+    delete []users;
+    delete pool;
     return 0;
 }
